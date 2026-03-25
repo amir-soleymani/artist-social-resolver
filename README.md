@@ -1,0 +1,1 @@
+# artist-social-resolver
