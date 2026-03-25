@@ -2,6 +2,9 @@ import pandas as pd
 import argparse
 import os
 import re
+from urlib.parse import quote_plus
+import requests
+from typing import List, Dict
 
 def normalize_whitespace(s: str) -> str:
     """Collapses multiple spaces and removes leading/trailing whitespace."""
@@ -47,6 +50,45 @@ def normalize_instagram_id(raw: str) -> str:
 
     return s
 
+def search_duckduckgo_html(query: str, num: int = 5) -> List[Dict]:
+    """
+    Performs a search on DuckDuckGo and scrapes the HTML for links and titles.
+    """
+    # Use quote_plus to make the name safe for a URL
+    ddg_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+    headers = {"User_Agent": "Mozilla/5.0"}
+
+    try: 
+        r = requests.get(ddg_url, headers=headers, timeout=15)
+        r.raise_for_status()
+        html = r.text
+
+        results = []
+        
+        # This Regex finds result links and titles in the DuckDuckGo HTML
+        pattern = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', flags=re.S)
+
+        for m in pattern.finditer(html):
+            link = m.group(1)
+            title = re.sub(r"<.*?>", "", m.group(2)).strip()
+            results.append({"link": link, "title": title})
+            if len(results) >= num:
+                break
+        return results
+    except Exception as e:
+        print(f"Search failed for {query}: {e}")
+        return []
+    
+def pick_best_link(artist_name: str, platform: srt, candidates: List[Dict]) -> str:
+    """
+    Simple logic to pick the link most likely to be the correct profile
+    """
+    for item in candidates:
+        url = item['link'].lower()
+        # If the platform name (e.g., soundcloud) is in the URL, it's a good candidate
+        if platform.lower() in url:
+            return item['link']
+    return ""
 
 def main():
     parser = argparse.ArgumentParser(description="Artist Social Media Resolver")
