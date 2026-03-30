@@ -2,10 +2,17 @@ import pandas as pd
 import argparse
 import os
 import re
+import time
 from urlib.parse import quote_plus
 import requests
-from typing import List, Dict
+from typing import List, Dict, Optional
 
+# Constants for MusicBrainz
+MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
+MB_HEADERS = {
+    "User_Agent": "ArtistSocialMediaResolver/1.0 (local-script)"
+}
+    
 def normalize_whitespace(s: str) -> str:
     """Collapses multiple spaces and removes leading/trailing whitespace."""
     return re.sub(r"\s+", " ", (s or "")).strip()
@@ -90,6 +97,64 @@ def pick_best_link(artist_name: str, platform: srt, candidates: List[Dict]) -> s
             return item['link']
     return ""
 
+def domain_of (url: str) -> str:
+    """Extracts the domain from a URL to help categorize links."""
+    try:
+        from urlib.parse import urlparse
+        return (urlparse(url).netloc or "").lower().replace("www.", "")
+    except Exception:
+        return ""
+    
+def musicbrainz_lookup_artist(artist_name: str, spotify_link: str) -> dict:
+    if not artist_name:
+        return {}
+    
+    try:
+        q = quote_plus(f'artist:"{artist_name}"')
+        url = f"{MUSICBRAINZ_BASE}/artist?query={q}&fmt=json&limit=8"
+        r = requests.get(url, headers=MB_HEADERS, timeout=25)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return {}
+    
+    artists = data.get("artists") or []
+    if not artists:
+        return {}
+    
+    # For now, we take the top match from MusicBrainz
+    candidate = artists[0]
+    mbid = candidate.get("id")
+
+    try:
+        detail_url = f"{MUSICBRAINZ_BASE}/artist/{mbid}?inc=url-rels+isnis&fmt=json"
+        dr = requests.get(detail_url, headers=MB_HEADERS, timeout=25)
+        dr.raise_for_status()
+        detail = dr.json()
+    except Exception:
+        return {}
+    
+    links = {}
+    for rel in detail.get("relations") or []:
+        rel_url = ((rel.get("url") or {}).get("resource")) or ""
+        if not rel_url:
+            continue
+        d = domain_of(rel_url)
+        if "spotify.com" in d:
+            links["spotify"] = rel_url
+        elif "instagram.com" in d:
+            links["instagram"] = rel_url
+        # ("I'll add other platforms later if needed")
+
+    isni_list = detail.get("isnis") or []
+    return {
+        "mbid": mbid,
+        "name": detail.get("name") or artist_name,
+        "isni": isni_list[0] if isni_list else "",
+        "links": links,
+    }
+    
+
 def main():
     parser = argparse.ArgumentParser(description="Artist Social Media Resolver")
     parser.add_argument("input", help="Input .xlsx file")
@@ -118,6 +183,22 @@ def main():
             
         if 'instagram_id' in df.columns:
             df['instagram_id'] = df['instagram_id'].apply(normalize_instagram_id)
+
+        print("Enriching data with MusicBrainz...")
+        mbids = []
+        isnis = []
+
+        for index, row in df.iterrows():
+            artist_name = row.get('artist_name', '')
+            spotify_link = row.get('spotify_link' '')
+            mb_identity = musicbrainz_lookup_artist(artist_name, spotify_link)
+            mbids.append(mb_identity.get("mbid", ""))
+            isnis.append(mb_identity.get("isni", ""))
+
+            time.sleep(1.0)
+
+        df['mbid'] = mbids
+        df['isni'] = isnis
 
         # Print the first row to our terminal so we can see the change immediately
         print("\nVerification (First Row Result):")
