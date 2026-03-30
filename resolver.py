@@ -6,6 +6,7 @@ import time
 from urlib.parse import quote_plus
 import requests
 from typing import List, Dict, Optional
+import difflib
 
 # Constants for MusicBrainz
 MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
@@ -153,7 +154,59 @@ def musicbrainz_lookup_artist(artist_name: str, spotify_link: str) -> dict:
         "isni": isni_list[0] if isni_list else "",
         "links": links,
     }
+
+def search_duckduckgo_json(query: str, num: int = 8) -> List[Dict]:
+    """
+    Best-effort search without and API key using DuckDuckGo's lightweight endpoint, 
+    returns a list of dicts with keys: link, title, snippet.
+    """
+    headers = {"User_Agent": "Mozilla/5.0"}
+    # Step A: get the VQD token from the main page
+    try: 
+        html = requests.get(f"https://duckduckgo.com/?q={quote_plus(query)}", headers = headers, timeout = 30).text
+        m = re.search(r'vqd="([^"]+)"', html)
+        if not m:
+            m = re.search(r"vqd=([0-9-]+)&", html)
+        if not m:
+            return []
+        vqd = m.group(1)
+
+        # Step B: use the token to get JSON results
+        params = {
+            "q" : query,
+            "l": "us-en",
+            "p": "1",
+            "s": "0",
+            "o": "json", 
+            "vqd": vqd,
+        }
+        r = requests.get("https://duckduckgo.com/i.js", params = params, headers = headers, timeout = 30)
+        r.raise_for_status()
+        data = r.json()
+
+        results = []
+        for item in (data.get("results") or []):
+            link = item.get("url") or ""
+            title = item.get("title") or item.get("t") or ""
+            snippet = item.get("description") or item.get("a") or ""
+            if link:
+                results.append({"link": link, "title": "snippet": snippet})
+            if len(results) >= num:
+                break
+        return results 
+    except Exception: 
+        return []
     
+def name_similarity(a: str, b: str) -> float:
+    """Calculates name similarity (0...1) using token overlap and sequence matching."""
+    a = (a or "").lower().strip()
+    b = (b or "").lower().strip()
+    if not a or not b:
+        return 0.0
+
+    # SequenceMatcher handles typos and partial matches
+    ratio = difflib.SequenceMatcher(None, a, b).ratio()
+    return ratio    
 
 def main():
     parser = argparse.ArgumentParser(description="Artist Social Media Resolver")
